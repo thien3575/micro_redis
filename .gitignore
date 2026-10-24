@@ -1,0 +1,9 @@
+/donglenh
+/kv_engine
+/bonho
+*.exe
+*.o
+a.out
+data.log
+newfile.txt
+.vscode/
