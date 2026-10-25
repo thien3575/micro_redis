@@ -1,6 +1,7 @@
 /donglenh
 /kv_engine
 /bonho
+/try
 *.exe
 *.o
 a.out
