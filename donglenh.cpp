@@ -9,7 +9,11 @@
 #include <stdexcept>
 #include <unordered_map>
 
+enum class ReadStatus {OK,CLEAN_EOF,TORN_OR_ERR};
+
 bool append_set_log(int mode,int fd, const std::string& key, const std::string& val);
+ReadStatus read_exact(int fd, void* buf, size_t count);
+
 class KVEngine
 {
     private:
@@ -162,4 +166,29 @@ bool append_set_log(int mode, int fd, const std::string& key, const std::string&
         p += static_cast<size_t>(w);
     }
     return fdatasync(fd) == 0;
+}
+
+ReadStatus read_exact(int fd, void* buf, size_t count)
+{
+    char* ptr = static_cast<char*>(buf);
+    size_t total_read = 0;
+    while(total_read < count)
+    {
+        ssize_t n = read(fd,ptr + total_read, count);
+        if(n < 0)
+        { 
+            if (errno == EINTR)
+            {
+                continue;
+            }
+            return ReadStatus::TORN_OR_ERR;
+        }
+        if(n == 0)
+        {
+            if(total_read == 0) return ReadStatus::CLEAN_EOF;
+            return ReadStatus::TORN_OR_ERR;
+        }
+        total_read+=static_cast<size_t>(n);
+    }
+    return ReadStatus::OK;
 }
