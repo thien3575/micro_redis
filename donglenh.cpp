@@ -19,18 +19,66 @@ class KVEngine
     private:
         std::unordered_map<std::string,std::string> m_storage;
         int m_fd = -1;
-        bool load_from_disk()
+
+        void load_from_disk(int fd)
         {
-            return true;
+            lseek(fd ,0 ,SEEK_SET);
+            uint8_t cmd_type = 2;
+
+            while(true)
+            {
+                off_t last_valid_offset = lseek(fd, 0, SEEK_CUR);
+                ReadStatus st;
+                st = read_exact(fd, &cmd_type, sizeof(cmd_type));
+                if(st == ReadStatus::CLEAN_EOF) return;
+                if(st == ReadStatus::TORN_OR_ERR || (cmd_type != 0 && cmd_type != 1))
+                {
+                    ftruncate(fd, last_valid_offset);
+                    break;
+                }
+                uint32_t klen = 0;
+                if(read_exact(fd, &klen, sizeof(klen)) != ReadStatus::OK)
+                {
+                    ftruncate(fd, last_valid_offset);
+                    break;
+                }
+                std::string key(klen,'\0');
+                if(read_exact(fd,key.data(),klen) != ReadStatus::OK)
+                {
+                    ftruncate(fd, last_valid_offset);
+                    break;
+                }
+                if(cmd_type == 0)
+                {
+                    m_storage.erase(key);
+                    continue;
+                }
+                uint32_t vlen = 0;
+                if(read_exact(fd, &vlen, sizeof(vlen)) != ReadStatus::OK)
+                {
+                    ftruncate(fd, last_valid_offset);
+                    break;
+                }
+                std::string value(vlen,'\0');
+                if(read_exact(fd,value.data(),vlen) != ReadStatus::OK)
+                {
+                    ftruncate(fd,last_valid_offset);
+                    break;
+                }
+                m_storage[key] = value;
+            }
         }
     public:
+        KVEngine(const KVEngine&) = delete;
+        KVEngine& operator=(const KVEngine) = delete;
         KVEngine()
         {
             m_fd = open("newfile.txt", O_APPEND | O_CREAT | O_RDWR, 0644);
             if (m_fd == -1)
             {
                 throw std::runtime_error(strerror(errno));
-            }
+            }   
+            load_from_disk(m_fd);
         }
         void set(std::string key, std::string value)
         {
@@ -47,15 +95,22 @@ class KVEngine
         }
         void del(std::string key)
         {
-            if(append_set_log(0,m_fd,key,"") && m_storage.erase(key) == 1)
+            auto it = m_storage.find(key);
+            if(it == m_storage.end())
             {
+                std::cout<<"FAILED\n";
+                return;
+            }
+            if(append_set_log(0,m_fd,key,""))
+            {
+                m_storage.erase(it);
                 std::cout<<"OK\n";
             }
             else
             {
                 std::cout<<"FAILED\n";
-                return;
             }
+            return;
         }
         void get(std::string key)
         {
@@ -139,14 +194,18 @@ bool append_set_log(int mode, int fd, const std::string& key, const std::string&
         frame.append(reinterpret_cast<const char*>(&vlen),sizeof(vlen));
         frame.append(val.data(),vlen);      
     }
-    else
+    else if(mode == 0)
     {
         frame.reserve(1 + 4 + klen);
         frame.append(reinterpret_cast<const char*>(&cmd_type), sizeof(cmd_type));
         frame.append(reinterpret_cast<const char*>(&klen),sizeof(klen));
         frame.append(key.data(),klen);
     }
-    
+    else
+    {
+        std::cout<<"invalid command\n";
+        return false;
+    }
 
     // keep writing until no bytes is left
     off_t safe_offset = lseek(fd,0,SEEK_END);
@@ -174,7 +233,7 @@ ReadStatus read_exact(int fd, void* buf, size_t count)
     size_t total_read = 0;
     while(total_read < count)
     {
-        ssize_t n = read(fd,ptr + total_read, count);
+        ssize_t n = read(fd,ptr + total_read, count - total_read);
         if(n < 0)
         { 
             if (errno == EINTR)
